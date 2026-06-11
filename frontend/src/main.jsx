@@ -2,7 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import Layout from './components/Layout'
-import Dashboard from './pages/Dashboard'
+import MeetingsPage from './pages/MeetingsPage'
 import PeoplePage from './pages/PeoplePage'
 import MeetingPage from './pages/MeetingPage'
 import ReportPage from './pages/ReportPage'
@@ -13,7 +13,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <BrowserRouter>
       <Routes>
         <Route element={<Layout />}>
-          <Route index element={<Dashboard />} />
+          <Route index element={<MeetingsPage />} />
           <Route path="people" element={<PeoplePage />} />
           <Route path="meetings/:id" element={<MeetingPage />} />
           <Route path="report" element={<ReportPage />} />

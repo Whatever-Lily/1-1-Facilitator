@@ -26,23 +26,23 @@ class Person(Base):
     name: Mapped[str] = mapped_column(String(100))
     role: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    meetings: Mapped[List["Meeting"]] = relationship(back_populates="person")
+    meetings: Mapped[List["Meeting"]] = relationship(back_populates="person", cascade="all, delete-orphan")
 
 
 class Meeting(Base):
     __tablename__ = "meetings"
     id: Mapped[int] = mapped_column(primary_key=True)
     person_id: Mapped[int] = mapped_column(ForeignKey("people.id"))
-    date: Mapped[date] = mapped_column(Date, default=date.today)
+    scheduled_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     person: Mapped["Person"] = relationship(back_populates="meetings")
-    topics: Mapped[List["Topic"]] = relationship(
+    topics: Mapped[List["Topic"]] = relationship(cascade="all, delete-orphan", 
         back_populates="meeting",
         foreign_keys="Topic.meeting_id",
         order_by="Topic.sort_order",
     )
-    action_items: Mapped[List["ActionItem"]] = relationship(
+    action_items: Mapped[List["ActionItem"]] = relationship(cascade="all, delete-orphan", 
         back_populates="meeting",
         order_by="ActionItem.id",
     )

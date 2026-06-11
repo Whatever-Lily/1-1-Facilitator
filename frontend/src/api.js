@@ -1,10 +1,13 @@
 const BASE = '/api'
 
 async function request(path, options = {}) {
-  const res = await fetch(`${BASE}${path}`, {
+  const url = `${BASE}${path}`
+  console.log(`[API REQUEST] ${options.method || 'GET'} ${url}`, options)
+  const res = await fetch(url, {
     headers: { 'Content-Type': 'application/json', ...options.headers },
     ...options,
   })
+  console.log(`[API RESPONSE] ${res.status} ${res.statusText} for ${url}`)
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }))
     throw new Error(err.detail || 'Request failed')
@@ -25,6 +28,7 @@ export const api = {
     },
     get: (id) => request(`/meetings/${id}`),
     create: (data) => request('/meetings', { method: 'POST', body: JSON.stringify(data) }),
+    delete: (id) => request(`/meetings/${id}`, { method: 'DELETE' }),
   },
   topics: {
     create: (meetingId, data) => request(`/meetings/${meetingId}/topics`, { method: 'POST', body: JSON.stringify(data) }),

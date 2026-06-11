@@ -1,8 +1,8 @@
 import { Link, Outlet, useLocation } from 'react-router-dom'
-import { LayoutDashboard, Users, FileText, ClipboardList } from 'lucide-react'
+import { Calendar, Users, FileText, ClipboardList } from 'lucide-react'
 
 const nav = [
-  { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
+  { to: '/', icon: Calendar, label: 'Meetings' },
   { to: '/people', icon: Users, label: 'People' },
   { to: '/report', icon: FileText, label: 'Reports' },
 ]
@@ -33,7 +33,7 @@ export default function Layout() {
       </aside>
       <main className="flex-1 overflow-auto">
         <div className="max-w-6xl mx-auto p-6">
-          <Outlet />
+          <Outlet key={loc.pathname} />
         </div>
       </main>
     </div>

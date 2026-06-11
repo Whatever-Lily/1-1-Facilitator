@@ -72,7 +72,7 @@ class ActionOut(BaseModel):
 
 class MeetingCreate(BaseModel):
     person_id: int
-    date: Optional[date] = None
+    scheduled_at: datetime
     notes: Optional[str] = None
 
 
@@ -80,7 +80,7 @@ class MeetingOut(BaseModel):
     id: int
     person_id: int
     person_name: str = ""
-    date: date
+    scheduled_at: datetime
     notes: Optional[str] = None
     created_at: datetime
     topics: list[TopicOut] = []
@@ -91,7 +91,7 @@ class MeetingOut(BaseModel):
 class MeetingSummary(BaseModel):
     id: int
     person_id: int
-    date: date
+    scheduled_at: datetime
     notes: Optional[str] = None
     topic_count: int
     action_count: int
@@ -107,7 +107,7 @@ class ReportFilters(BaseModel):
 class ActionSummary(BaseModel):
     id: int
     meeting_id: int
-    meeting_date: date
+    meeting_scheduled_at: datetime
     person_name: str
     description: str
     assignee: Optional[str] = None

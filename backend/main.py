@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Query, Depends
+from sqlalchemy import func
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
@@ -70,11 +71,11 @@ def list_meetings(
     q = db.query(Meeting)
     if person_id:
         q = q.filter(Meeting.person_id == person_id)
-    q = q.order_by(Meeting.date.desc())
+    q = q.order_by(Meeting.scheduled_at.desc())
     out = []
     for m in q.all():
         out.append(MeetingSummary(
-            id=m.id, person_id=m.person_id, date=m.date,
+            id=m.id, person_id=m.person_id, scheduled_at=m.scheduled_at,
             notes=m.notes, topic_count=len(m.topics),
             action_count=len(m.action_items),
             person_name=m.person.name,
@@ -91,7 +92,7 @@ def get_meeting(meeting_id: int, db: Session = Depends(get_db)):
         "id": m.id,
         "person_id": m.person_id,
         "person_name": m.person.name,
-        "date": str(m.date),
+        "scheduled_at": str(m.scheduled_at),
         "notes": m.notes,
         "created_at": str(m.created_at),
         "topics": [{
@@ -122,30 +123,83 @@ def get_meeting(meeting_id: int, db: Session = Depends(get_db)):
 def create_meeting(data: MeetingCreate, db: Session = Depends(get_db)):
     m = Meeting(
         person_id=data.person_id,
-        date=data.date or date.today(),
+        scheduled_at=data.scheduled_at,
         notes=data.notes,
     )
     db.add(m)
-    db.commit()
+    db.flush()  # Flush to get m.id before commit
 
-    # carry forward unresolved topics from the previous meeting
-    prev = (
-        db.query(Meeting)
-        .filter(Meeting.person_id == data.person_id, Meeting.id != m.id)
-        .order_by(Meeting.date.desc())
-        .first()
-    )
-    if prev:
-        unresolved_topics = [t for t in prev.topics if not t.resolved]
-        for i, t in enumerate(unresolved_topics):
-            db.add(Topic(
-                meeting_id=m.id,
-                sort_order=i,
-                title=t.title,
-                content=t.content,
-                category=t.category,
-                carried_from_meeting_id=prev.id,
-            ))
+    # Scheme B: Carry forward ALL historically unresolved topics and non-completed actions,
+    # preventing duplicates by keeping only the most recent iteration of each unique item.
+    from collections import defaultdict
+    
+    # 1. Find all unresolved topics for this person
+    # Use Topic.meeting.has() to avoid AmbiguousForeignKeysError since Topic has 2 FKs to Meeting
+    all_unresolved_topics = db.query(Topic).filter(
+        Topic.meeting.has(Meeting.person_id == data.person_id),
+        Topic.resolved == False
+    ).all()
+    
+    print(f"DEBUG: Found {len(all_unresolved_topics)} unresolved topics for person {data.person_id}")
+    for t in all_unresolved_topics:
+        print(f"  - '{t.title}' (Meeting {t.meeting_id}, Resolved: {t.resolved})")
+    
+    # Group by signature (title + content) to prevent duplicates from carry-over chains
+    topic_groups = defaultdict(list)
+    for t in all_unresolved_topics:
+        sig = (t.title.strip().lower(), (t.content or "").strip().lower())
+        topic_groups[sig].append(t)
+        
+    latest_topics = []
+    for sig, topics in topic_groups.items():
+        topics.sort(key=lambda x: x.created_at, reverse=True)
+        latest_topics.append(topics[0])
+        
+    print(f"DEBUG: After deduplication, carrying {len(latest_topics)} topics: {[t.title for t in latest_topics]}")
+        
+    # Keep only the most recently created version of each unresolved topic
+    latest_topics = []
+    for sig, topics in topic_groups.items():
+        topics.sort(key=lambda x: x.created_at, reverse=True)
+        latest_topics.append(topics[0])
+        
+    # Carry them into the new meeting
+    for i, t in enumerate(latest_topics):
+        db.add(Topic(
+            meeting_id=m.id,
+            sort_order=i,
+            title=t.title,
+            content=t.content,
+            category=t.category,
+            carried_from_meeting_id=t.meeting_id,
+        ))
+
+    # 2. Find all non-completed action items for this person
+    all_uncompleted_actions = db.query(ActionItem).filter(
+        ActionItem.meeting.has(Meeting.person_id == data.person_id),
+        ActionItem.status.notin_([ActionStatus.completed, ActionStatus.cancelled])
+    ).all()
+    
+    # Group by signature (description) to prevent duplicates
+    action_groups = defaultdict(list)
+    for a in all_uncompleted_actions:
+        sig = (a.description.strip().lower(), (a.assignee or "").strip().lower())
+        action_groups[sig].append(a)
+        
+    latest_actions = []
+    for sig, actions in action_groups.items():
+        actions.sort(key=lambda x: x.created_at, reverse=True)
+        latest_actions.append(actions[0])
+        
+    # Carry them into the new meeting
+    for a in latest_actions:
+        db.add(ActionItem(
+            meeting_id=m.id,
+            description=a.description,
+            assignee=a.assignee,
+            status=a.status,
+            due_date=a.due_date,
+        ))
 
     db.commit()
     db.refresh(m)
@@ -153,7 +207,7 @@ def create_meeting(data: MeetingCreate, db: Session = Depends(get_db)):
         "id": m.id,
         "person_id": m.person_id,
         "person_name": m.person.name,
-        "date": str(m.date),
+        "scheduled_at": str(m.scheduled_at),
         "notes": m.notes,
         "created_at": str(m.created_at),
         "topics": [{
@@ -298,6 +352,16 @@ def delete_action(action_id: int, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
+
+@app.delete("/api/meetings/{meeting_id}")
+def delete_meeting(meeting_id: int, db: Session = Depends(get_db)):
+    m = db.get(Meeting, meeting_id)
+    if not m:
+        raise HTTPException(404)
+    db.delete(m)
+    db.commit()
+    return {"ok": True}
+
 # ─── Reports ───────────────────────────────────────────────
 
 @app.get("/api/report")
@@ -311,10 +375,10 @@ def report(
     if person_id:
         mq = mq.filter(Meeting.person_id == person_id)
     if date_from:
-        mq = mq.filter(Meeting.date >= date_from)
+        mq = mq.filter(func.date(Meeting.scheduled_at) >= date_from)
     if date_to:
-        mq = mq.filter(Meeting.date <= date_to)
-    meetings = mq.order_by(Meeting.date.desc()).all()
+        mq = mq.filter(func.date(Meeting.scheduled_at) <= date_to)
+    meetings = mq.order_by(Meeting.scheduled_at.desc()).all()
     meeting_ids = [m.id for m in meetings]
 
     topics = (
@@ -333,7 +397,7 @@ def report(
         st = a.status.value if isinstance(a.status, ActionStatus) else str(a.status)
         action_summaries.append({
             "id": a.id, "meeting_id": a.meeting_id,
-            "meeting_date": str(a.meeting.date),
+            "meeting_date": str(a.meeting.scheduled_at),
             "person_name": a.meeting.person.name,
             "description": a.description, "assignee": a.assignee,
             "status": st,
@@ -342,14 +406,14 @@ def report(
 
     return {
         "meetings": [{
-            "id": m.id, "person_id": m.person_id, "date": str(m.date),
+            "id": m.id, "person_id": m.person_id, "scheduled_at": str(m.scheduled_at),
             "notes": m.notes, "topic_count": len(m.topics),
             "action_count": len(m.action_items),
             "person_name": m.person.name,
         } for m in meetings],
         "topic_highlights": [{
             "id": t.id, "meeting_id": t.meeting_id,
-            "meeting_date": str(t.meeting.date), "person_name": t.meeting.person.name,
+            "meeting_date": str(t.meeting.scheduled_at), "person_name": t.meeting.person.name,
             "title": t.title, "category": t.category,
             "resolved": t.resolved, "carried_from": bool(t.carried_from_meeting_id),
         } for t in topics],
