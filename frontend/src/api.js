@@ -23,7 +23,10 @@ export const api = {
   },
   meetings: {
     list: (params = {}) => {
-      const qs = new URLSearchParams(params).toString()
+      const filtered = Object.fromEntries(
+        Object.entries(params).filter(([_, v]) => v != null && v !== '')
+      )
+      const qs = new URLSearchParams(filtered).toString()
       return request(`/meetings${qs ? '?' + qs : ''}`)
     },
     get: (id) => request(`/meetings/${id}`),

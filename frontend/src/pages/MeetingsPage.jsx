@@ -1,7 +1,34 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../api'
-import { Plus, Calendar, User, ArrowRight, X } from 'lucide-react'
+import { Plus, Calendar, User, ArrowRight, X, ChevronLeft, ChevronRight, Filter } from 'lucide-react'
+
+const QUARTERS = [
+  { label: 'Jan - Mar',  months: [0, 1, 2] },
+  { label: 'Apr - Jun',  months: [3, 4, 5] },
+  { label: 'Jul - Sep',  months: [6, 7, 8] },
+  { label: 'Oct - Dec',  months: [9, 10, 11] },
+]
+
+const STATIC_YEARS = [2026, 2027]
+
+function getQuarterOptions() {
+  const currentYear = new Date().getFullYear()
+  const options = []
+  for (const year of STATIC_YEARS) {
+    for (let qi = 0; qi < 4; qi++) {
+      if (year > currentYear) continue
+      const q = QUARTERS[qi]
+      options.push({
+        value: `${year}-Q${qi + 1}`,
+        label: `${q.label} (${year})`,
+        date_from: `${year}-${String(q.months[0] + 1).padStart(2, '0')}-01`,
+        date_to: `${year}-${String(q.months[2] + 1).padStart(2, '0')}-${String(new Date(year, q.months[2] + 1, 0).getDate()).padStart(2, '0')}`,
+      })
+    }
+  }
+  return options
+}
 
 export default function Meetings() {
   const [people, setPeople] = useState([])
@@ -15,13 +42,53 @@ export default function Meetings() {
   const [quickDate, setQuickDate] = useState('')
   const [quickTime, setQuickTime] = useState('')
   
+  // Filter & Pagination states
+  const [filterPerson, setFilterPerson] = useState('')
+  const [filterQuarter, setFilterQuarter] = useState('')
+  const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [pageSize] = useState(10)
   const navigate = useNavigate()
 
-  const load = () => {
-    api.people.list().then(setPeople)
-    api.meetings.list().then(setMeetings)
+
+
+  
+  useEffect(() => {
+    let cancelled = false
+    api.people.list().then(ps => {
+      if (!cancelled) setPeople(ps)
+    })
+    return () => { cancelled = true }
+  }, [])
+  
+  useEffect(() => {
+    let cancelled = false
+    const q = { page, page_size: pageSize }
+    if (filterPerson) q.person_id = filterPerson
+    if (filterQuarter) {
+      const opt = quarterOptions.find(o => o.value === filterQuarter)
+      if (opt) { q.date_from = opt.date_from; q.date_to = opt.date_to }
+    }
+    api.meetings.list(q).then(data => {
+      if (!cancelled) {
+        setMeetings(data.items)
+        setTotalPages(data.pages)
+      }
+    })
+    return () => { cancelled = true }
+  }, [page, filterPerson, filterQuarter])
+  
+  // Reset page when filters change
+  const handleFilterPersonChange = (v) => {
+    setFilterPerson(v)
+    setPage(1)
   }
-  useEffect(load, [])
+  const handleFilterQuarterChange = (v) => {
+    setFilterQuarter(v)
+    setPage(1)
+  }
+  
+  const quarterOptions = getQuarterOptions()
 
   const createScheduledMeeting = async (e) => {
     e.preventDefault()
@@ -32,23 +99,29 @@ export default function Meetings() {
       setMeetTime('')
       setSelectedPersonId('')
       setShowNew(false)
-      load()
+      // Reload people list and meetings after schedule
+      api.people.list().then(setPeople)
+      const q2 = { page: 1, page_size: pageSize }
+      if (filterPerson) q2.person_id = filterPerson
+      if (filterQuarter) {
+        const opt2 = quarterOptions.find(o => o.value === filterQuarter)
+        if (opt2) { q2.date_from = opt2.date_from; q2.date_to = opt2.date_to }
+      }
+      api.meetings.list(q2).then(data => {
+        setMeetings(data.items)
+        setTotalPages(data.pages)
+      })
     }
   }
 
   const handleQuickStart = async (e) => {
     e.preventDefault()
     if (quickStartPerson && quickDate && quickTime) {
-      // Always create a NEW meeting for "Start 1:1" using the explicitly chosen time.
-      // This ensures the time is never overwritten by an old "Schedule" placeholder.
       const dateTimeStr = `${quickDate}T${quickTime}:00`
       const m = await api.meetings.create({ person_id: quickStartPerson.id, scheduled_at: dateTimeStr })
-      
       setQuickStartPerson(null)
       setQuickDate('')
       setQuickTime('')
-      
-      // Enter in start mode so it can be cleanly discarded if not saved
       navigate(`/meetings/${m.id}?mode=start`)
     }
   }
@@ -182,48 +255,74 @@ export default function Meetings() {
       <section>
         <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">Team Members</h3>
         <div className="grid gap-3">
-          {people.map(p => {
-            const personMeetings = meetings.filter(m => m.person_id === p.id)
-            return (
-              <div key={p.id} className="flex items-center justify-between p-4 bg-white rounded-lg border border-gray-100">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-medium text-gray-500">
-                    <User size={14} />
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-gray-900">{p.name}</div>
-                    {p.role && <div className="text-xs text-gray-500">{p.role}</div>}
-                  </div>
+          {people.map(p => (
+            <div key={p.id} className="flex items-center justify-between p-4 bg-white rounded-lg border border-gray-100">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center text-xs font-medium text-gray-500">
+                  <User size={14} />
                 </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-xs text-gray-500">
-                    {personMeetings.length} meetings
-                  </div>
-                  <button
-                    onClick={() => {
-                      setQuickStartPerson(p)
-                      const now = new Date()
-                      setQuickDate(now.toISOString().split('T')[0])
-                      setQuickTime(now.toTimeString().slice(0, 5).substring(0, 2) + ':00')
-                    }}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-900 text-white rounded-md hover:bg-gray-800 transition-colors"
-                  >
-                    <Calendar size={12} /> Start 1:1
-                  </button>
+                <div>
+                  <div className="text-sm font-medium text-gray-900">{p.name}</div>
+                  {p.role && <div className="text-xs text-gray-500">{p.role}</div>}
                 </div>
               </div>
-            )
-          })}
+              <div className="flex items-center gap-4">
+                <div className="text-xs text-gray-500">
+                  {p.meeting_count} meetings
+                </div>
+                <button
+                  onClick={() => {
+                    setQuickStartPerson(p)
+                    const now = new Date()
+                    setQuickDate(now.toISOString().split('T')[0])
+                    setQuickTime(now.toTimeString().slice(0, 5).substring(0, 2) + ':00')
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-gray-900 text-white rounded-md hover:bg-gray-800 transition-colors"
+                >
+                  <Calendar size={12} /> Start 1:1
+                </button>
+              </div>
+            </div>
+          ))}
           {people.length === 0 && (
             <div className="text-sm text-gray-400 py-8 text-center bg-white rounded-lg border border-gray-100">
-              No team members yet. Use the form above to add your first direct report.
+              No team members yet.
             </div>
           )}
         </div>
       </section>
 
+      {/* Filters */}
       <section>
-        <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider mb-3">Recent Meetings</h3>
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-medium text-gray-500 uppercase tracking-wider">Recent Meetings</h3>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1.5">
+              <Filter size={12} className="text-gray-400" />
+              <select
+                value={filterPerson}
+                onChange={e => handleFilterPersonChange(e.target.value)}
+                className="px-2 py-1 text-xs border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="">All Members</option>
+                {people.map(p => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+              <select
+                value={filterQuarter}
+                onChange={e => handleFilterQuarterChange(e.target.value)}
+                className="px-2 py-1 text-xs border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-1 focus:ring-gray-400"
+              >
+                <option value="">All Time</option>
+                {quarterOptions.map(q => (
+                  <option key={q.value} value={q.value}>{q.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
         <div className="space-y-2">
           {meetings.map(m => (
             <div
@@ -246,10 +345,33 @@ export default function Meetings() {
           ))}
           {meetings.length === 0 && (
             <div className="text-sm text-gray-400 py-8 text-center bg-white rounded-lg border border-gray-100">
-              No meetings yet. Schedule or start a 1:1 above.
+              No meetings found.
             </div>
           )}
         </div>
+
+        {/* Pagination */}
+        {totalPages > 1 && (
+          <div className="flex items-center justify-center gap-3 mt-4 pb-2">
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="p-1.5 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronLeft size={14} />
+            </button>
+            <span className="text-xs text-gray-500">
+              Page {page} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+              className="p-1.5 rounded-md border border-gray-200 text-gray-500 hover:bg-gray-50 disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              <ChevronRight size={14} />
+            </button>
+          </div>
+        )}
       </section>
     </div>
   )

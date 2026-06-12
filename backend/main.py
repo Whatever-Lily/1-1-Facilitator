@@ -39,7 +39,14 @@ def get_db():
 
 @app.get("/api/people", response_model=list[PersonOut])
 def list_people(db: Session = Depends(get_db)):
-    return db.query(Person).order_by(Person.name).all()
+    people = db.query(Person).order_by(Person.name).all()
+    return [{
+        "id": p.id,
+        "name": p.name,
+        "role": p.role,
+        "meeting_count": len(p.meetings),
+        "created_at": p.created_at,
+    } for p in people]
 
 
 @app.post("/api/people", response_model=PersonOut)
@@ -63,24 +70,42 @@ def delete_person(person_id: int, db: Session = Depends(get_db)):
 
 # ─── Meetings ──────────────────────────────────────────────
 
-@app.get("/api/meetings", response_model=list[MeetingSummary])
+@app.get("/api/meetings")
 def list_meetings(
     person_id: Optional[int] = Query(None),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=10000),
     db: Session = Depends(get_db),
 ):
     q = db.query(Meeting)
-    if person_id:
+    if person_id is not None:
         q = q.filter(Meeting.person_id == person_id)
+    if date_from:
+        q = q.filter(func.date(Meeting.scheduled_at) >= date_from)
+    if date_to:
+        q = q.filter(func.date(Meeting.scheduled_at) <= date_to)
     q = q.order_by(Meeting.scheduled_at.desc())
+    
+    total = q.count()
+    items = q.offset((page - 1) * page_size).limit(page_size).all()
+    
     out = []
-    for m in q.all():
+    for m in items:
         out.append(MeetingSummary(
             id=m.id, person_id=m.person_id, scheduled_at=m.scheduled_at,
             notes=m.notes, topic_count=len(m.topics),
             action_count=len(m.action_items),
             person_name=m.person.name,
-        ))
-    return out
+        ).model_dump())
+    
+    return {
+        "items": out,
+        "total": total,
+        "page": page,
+        "pages": max(1, (total + page_size - 1) // page_size),
+    }
 
 
 @app.get("/api/meetings/{meeting_id}")
@@ -147,7 +172,7 @@ def create_meeting(data: MeetingCreate, db: Session = Depends(get_db)):
     # Group by signature (title + content) to prevent duplicates from carry-over chains
     topic_groups = defaultdict(list)
     for t in all_unresolved_topics:
-        sig = (t.title.strip().lower(), (t.content or "").strip().lower())
+        sig = t.title.strip().lower()
         topic_groups[sig].append(t)
         
     latest_topics = []
@@ -381,28 +406,62 @@ def report(
     meetings = mq.order_by(Meeting.scheduled_at.desc()).all()
     meeting_ids = [m.id for m in meetings]
 
-    topics = (
+    all_topics = (
         db.query(Topic).filter(Topic.meeting_id.in_(meeting_ids)).order_by(Topic.created_at.desc()).all()
     ) if meeting_ids else []
 
-    actions = (
+    all_actions = (
         db.query(ActionItem)
         .filter(ActionItem.meeting_id.in_(meeting_ids))
-        .order_by(ActionItem.status, ActionItem.due_date)
+        .order_by(ActionItem.created_at.desc())
         .all()
     ) if meeting_ids else []
 
-    action_summaries = []
-    for a in actions:
+    # Group topics by signature (title + content)
+    from collections import OrderedDict
+    topic_groups = OrderedDict()
+    for t in all_topics:
+        sig = t.title.strip().lower()
+        version = {
+            "id": t.id, "meeting_id": t.meeting_id,
+            "meeting_date": str(t.meeting.scheduled_at), "person_name": t.meeting.person.name,
+            "title": t.title, "content": t.content, "category": t.category,
+            "resolved": t.resolved, "carried_from": bool(t.carried_from_meeting_id),
+        }
+        if sig not in topic_groups:
+            topic_groups[sig] = {"versions": [], "latest": None}
+        topic_groups[sig]["versions"].append(version)
+        if topic_groups[sig]["latest"] is None:
+            topic_groups[sig]["latest"] = version
+
+    # Group actions by signature (description + assignee)
+    action_groups = OrderedDict()
+    for a in all_actions:
         st = a.status.value if isinstance(a.status, ActionStatus) else str(a.status)
-        action_summaries.append({
+        sig = (a.description.strip().lower(), (a.assignee or "").strip().lower())
+        version = {
             "id": a.id, "meeting_id": a.meeting_id,
-            "meeting_date": str(a.meeting.scheduled_at),
-            "person_name": a.meeting.person.name,
+            "meeting_date": str(a.meeting.scheduled_at), "person_name": a.meeting.person.name,
             "description": a.description, "assignee": a.assignee,
             "status": st,
             "due_date": str(a.due_date) if a.due_date else None,
-        })
+        }
+        if sig not in action_groups:
+            action_groups[sig] = {"versions": [], "latest": None}
+        action_groups[sig]["versions"].append(version)
+        if action_groups[sig]["latest"] is None:
+            action_groups[sig]["latest"] = version
+
+    # Compute stats from unique groups
+    unique_topics_count = len(topic_groups)
+    open_actions_count = sum(
+        1 for g in action_groups.values()
+        if g["latest"]["status"] in ("pending", "in_progress")
+    )
+    completed_actions_count = sum(
+        1 for g in action_groups.values()
+        if g["latest"]["status"] == "completed"
+    )
 
     return {
         "meetings": [{
@@ -411,18 +470,13 @@ def report(
             "action_count": len(m.action_items),
             "person_name": m.person.name,
         } for m in meetings],
-        "topic_highlights": [{
-            "id": t.id, "meeting_id": t.meeting_id,
-            "meeting_date": str(t.meeting.scheduled_at), "person_name": t.meeting.person.name,
-            "title": t.title, "category": t.category,
-            "resolved": t.resolved, "carried_from": bool(t.carried_from_meeting_id),
-        } for t in topics],
-        "action_items": action_summaries,
+        "topics": list(topic_groups.values()),
+        "action_items": list(action_groups.values()),
         "stats": {
             "total_meetings": len(meetings),
-            "total_topics": len(topics),
-            "open_actions": sum(1 for a in action_summaries if a["status"] in ("pending", "in_progress")),
-            "completed_actions": sum(1 for a in action_summaries if a["status"] == "completed"),
+            "unique_topics": unique_topics_count,
+            "open_actions": open_actions_count,
+            "completed_actions": completed_actions_count,
         },
     }
 
