@@ -8,6 +8,12 @@ export default defineConfig({
     proxy: {
       '/api': 'http://localhost:8000',
     },
+    fs: {
+      strict: false,
+      allow: [
+        '/Users/LYU1/Library/CloudStorage/OneDrive-VFCCorp/Documents/1:1 Facilitator',
+      ],
+    },
   },
   build: {
     outDir: 'dist',

@@ -8,7 +8,7 @@ export default function PeoplePage() {
   const [role, setRole] = useState('')
 
   const load = () => api.people.list().then(setPeople)
-  useEffect(load, [])
+  useEffect(() => { load() }, [])
 
   const add = async (e) => {
     e.preventDefault()
