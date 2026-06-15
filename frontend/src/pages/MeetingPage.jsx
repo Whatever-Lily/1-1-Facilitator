@@ -11,7 +11,7 @@ const STATUS_OPTS = [
   { value: 'cancelled', label: 'Cancelled' },
 ]
 
-const CATEGORIES = ['Performance', 'Career Growth', 'Project Updates', 'Blockers', 'Wellbeing', 'Feedback', 'Other']
+const CATEGORIES = ['Career Growth', 'Project Updates', 'Team', 'Others']
 
 function TopicRow({ topic, onUpdate, onDelete }) {
   const [edit, setEdit] = useState(false)
